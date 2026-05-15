@@ -4,6 +4,8 @@ A minimal, frameless desktop timer for Windows built with PyQt5.
 
 ![Python](https://img.shields.io/badge/Python-3.13-blue) ![PyQt5](https://img.shields.io/badge/PyQt5-5.x-green) ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 
+<img width="420" height="555" alt="PixPin_2026-05-15_18-58-01" src="https://github.com/user-attachments/assets/a1ac6599-b955-415d-9e3a-a6b202b7c4f3" />
+
 ## Features
 
 - **Count-up & Countdown** — toggle between stopwatch and timer mode
