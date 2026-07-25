@@ -1,10 +1,11 @@
 import ctypes
 import os
 import sys
+from datetime import datetime, timedelta
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QApplication, QShortcut,
+    QApplication, QShortcut, QStackedWidget,
 )
 from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QKeySequence
@@ -19,6 +20,7 @@ from ui.display import TimeDisplay
 from ui.mode_toggle import ModeToggle
 from ui.controls import ControlPanel
 from ui.presets import PresetBar, MAX_PRESETS
+from ui.reminder import ReminderPanel
 
 _MAX_CD_H = 99
 _MAX_CD_M = 59
@@ -198,6 +200,11 @@ class MainWindow(QWidget):
         self._cd_m = 5
         self._cd_s = 0
 
+        # Reminder mode: target clock time (24h) the alert is set for
+        now = datetime.now()
+        self._rm_h = now.hour
+        self._rm_m = now.minute
+
         self._audio = AudioPlayer(_MP3_PATH, plays=3)
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
@@ -304,15 +311,18 @@ class MainWindow(QWidget):
         cl.addWidget(hint_area)
         cl.addSpacing(14)
 
-        # ── Preset area (fixed height so controls don't shift when hidden) ─
-        preset_area = QWidget()
-        preset_area.setFixedHeight(_PRESET_BAR_H)
-        preset_inner = QVBoxLayout(preset_area)
-        preset_inner.setContentsMargins(0, 0, 0, 0)
-        preset_inner.setSpacing(0)
+        # ── Preset / reminder area — a stack so exactly one panel occupies the
+        # fixed height at a time (a hidden QVBoxLayout sibling would otherwise
+        # still reserve its share of the space).
+        self._preset_stack = QStackedWidget()
+        self._preset_stack.setFixedHeight(_PRESET_BAR_H)
         self.preset_bar = PresetBar()
-        preset_inner.addWidget(self.preset_bar)
-        cl.addWidget(preset_area)
+        self.reminder_panel = ReminderPanel()
+        self._blank_panel = QWidget()
+        self._preset_stack.addWidget(self.preset_bar)
+        self._preset_stack.addWidget(self.reminder_panel)
+        self._preset_stack.addWidget(self._blank_panel)
+        cl.addWidget(self._preset_stack)
 
         cl.addSpacing(14)
 
@@ -347,22 +357,62 @@ class MainWindow(QWidget):
     def _countdown_secs(self) -> int:
         return self._cd_h * 3600 + self._cd_m * 60 + self._cd_s
 
+    @property
+    def _reminder_locked(self) -> bool:
+        """True while a reminder is armed — only Reset (or closing) may act."""
+        return self.engine.mode == TimerMode.REMINDER and self.engine.state != TimerState.IDLE
+
     def _sync_hms_from_secs(self, secs: int):
         self._cd_h = secs // 3600
         self._cd_m = (secs % 3600) // 60
         self._cd_s = secs % 60
 
+    def _update_reminder_display(self):
+        """Show the target clock time (H:M) on the big digit display."""
+        self.time_display.set_time_ms((self._rm_h * 3600 + self._rm_m * 60) * 1000)
+
+    def _compute_reminder_times(self):
+        """Return (target_datetime, alert_datetime), rolling to tomorrow as needed."""
+        now = datetime.now()
+        target = now.replace(hour=self._rm_h, minute=self._rm_m, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        alert = target - timedelta(minutes=self.reminder_panel.offset_minutes)
+        if alert <= now:
+            target += timedelta(days=1)
+            alert += timedelta(days=1)
+        return target, alert
+
     def _refresh_ui(self):
         """Full UI state refresh — call whenever mode, state, or time changes."""
         is_countdown = self.engine.mode == TimerMode.COUNTDOWN
+        is_reminder  = self.engine.mode == TimerMode.REMINDER
         is_idle      = self.engine.state == TimerState.IDLE
 
-        # Scroll on display: only countdown + idle
-        self.time_display.set_scroll_enabled(is_countdown and is_idle)
+        # Scroll on display: countdown or reminder, only while idle
+        self.time_display.set_scroll_enabled((is_countdown or is_reminder) and is_idle)
 
-        # Preset bar + hint row: only in countdown mode
-        self.preset_bar.setVisible(is_countdown)
-        self.scroll_hint.setVisible(is_countdown)
+        # Preset/reminder stack: preset bar in countdown, reminder panel while
+        # idle in reminder mode (blank while running, or in count-up mode)
+        if is_countdown:
+            self._preset_stack.setCurrentWidget(self.preset_bar)
+        elif is_reminder and is_idle:
+            self._preset_stack.setCurrentWidget(self.reminder_panel)
+        else:
+            self._preset_stack.setCurrentWidget(self._blank_panel)
+        # Hint row: countdown or reminder. While a reminder is armed, show what
+        # it's waiting for instead of the (no longer applicable) scroll hint.
+        if is_reminder and not is_idle:
+            offset = self.reminder_panel.offset_minutes
+            when = f"{offset} min early" if offset > 0 else "on time"
+            self.scroll_hint.setText(f"reminder armed · {when}")
+        else:
+            self.scroll_hint.setText("scroll to adjust")
+        self.scroll_hint.setVisible(is_countdown or is_reminder)
+
+        # Lock the mode toggle while a reminder is armed — only Reset (or
+        # closing the window) can back out of it.
+        self.mode_toggle.setEnabled(not self._reminder_locked)
 
         # "add as preset": countdown + idle + time > 0 + presets not full + no duplicate
         already_saved = any(
@@ -403,6 +453,10 @@ class MainWindow(QWidget):
         self.controls.update_state(TimerState.IDLE)
         if mode == TimerMode.COUNTDOWN:
             self.time_display.set_time_ms(self._countdown_secs * 1000)
+        elif mode == TimerMode.REMINDER:
+            now = datetime.now()
+            self._rm_h, self._rm_m = now.hour, now.minute
+            self._update_reminder_display()
         else:
             self.time_display.set_time_ms(0)
         self._refresh_ui()
@@ -419,15 +473,26 @@ class MainWindow(QWidget):
         self._refresh_ui()
 
     def _on_scroll(self, seg: str, delta: int):
-        if self.engine.state == TimerState.RUNNING or self.engine.mode != TimerMode.COUNTDOWN:
+        if self.engine.state != TimerState.IDLE:
             return
-        if seg == "h":
-            self._cd_h = (self._cd_h + delta) % (_MAX_CD_H + 1)
-        elif seg == "m":
-            self._cd_m = (self._cd_m + delta) % (_MAX_CD_M + 1)
+        if self.engine.mode == TimerMode.COUNTDOWN:
+            if seg == "h":
+                self._cd_h = (self._cd_h + delta) % (_MAX_CD_H + 1)
+            elif seg == "m":
+                self._cd_m = (self._cd_m + delta) % (_MAX_CD_M + 1)
+            else:
+                self._cd_s = ((self._cd_s // 5 + delta) * 5) % 60     # 0,5,10…55, wrapping
+            self.time_display.set_time_ms(self._countdown_secs * 1000)
+        elif self.engine.mode == TimerMode.REMINDER:
+            if seg == "h":
+                self._rm_h = (self._rm_h + delta) % 24
+            elif seg == "m":
+                self._rm_m = (self._rm_m + delta) % 60
+            else:
+                return   # seconds aren't part of the target clock time
+            self._update_reminder_display()
         else:
-            self._cd_s = ((self._cd_s // 5 + delta) * 5) % 60     # 0,5,10…55, wrapping
-        self.time_display.set_time_ms(self._countdown_secs * 1000)
+            return
         self._refresh_ui()
 
     def _on_add_as_preset(self):
@@ -439,12 +504,18 @@ class MainWindow(QWidget):
             if self._countdown_secs <= 0:
                 return
             self.engine.target_ms = self._countdown_secs * 1000
+        elif self.engine.mode == TimerMode.REMINDER:
+            _, alert_dt = self._compute_reminder_times()
+            remaining_s = (alert_dt - datetime.now()).total_seconds()
+            self.engine.target_ms = max(0, int(remaining_s * 1000))
         self._finish_handled = False
         self.engine.start()
-        self.controls.update_state(TimerState.RUNNING)
+        self.controls.update_state(TimerState.RUNNING, no_pause=self.engine.mode == TimerMode.REMINDER)
         self._refresh_ui()
 
     def _on_pause(self):
+        if self.engine.mode == TimerMode.REMINDER:
+            return   # reminder mode has no pause — only Reset backs it out
         self.engine.pause()
         self.controls.update_state(TimerState.PAUSED)
         self._refresh_ui()
@@ -459,10 +530,15 @@ class MainWindow(QWidget):
         self._finish_handled = False
         self.time_display.stop_flash()
         self._audio.stop()
-        self._cd_h = 0
-        self._cd_m = 0
-        self._cd_s = 0
-        self.time_display.set_time_ms(0)
+        if self.engine.mode == TimerMode.COUNTDOWN:
+            self._cd_h = 0
+            self._cd_m = 0
+            self._cd_s = 0
+            self.time_display.set_time_ms(0)
+        elif self.engine.mode == TimerMode.REMINDER:
+            self._update_reminder_display()
+        else:
+            self.time_display.set_time_ms(0)
         self.controls.update_state(TimerState.IDLE)
         self._refresh_ui()
 
@@ -471,11 +547,14 @@ class MainWindow(QWidget):
         if st == TimerState.IDLE:
             self._on_start()
         elif st == TimerState.RUNNING:
-            self._on_pause()
+            if self.engine.mode != TimerMode.REMINDER:
+                self._on_pause()
         else:
             self._on_resume()
 
     def _trigger_preset(self, index: int):
+        if self._reminder_locked:
+            return
         if index < len(self.preset_bar._presets):
             self._on_preset_selected(self.preset_bar._presets[index]["seconds"])
 
@@ -490,8 +569,9 @@ class MainWindow(QWidget):
             return
         if self.engine.mode == TimerMode.COUNTUP:
             self.time_display.set_time_ms(self.engine.current_elapsed_ms)
-        else:
+        elif self.engine.mode == TimerMode.COUNTDOWN:
             self.time_display.set_time_ms(self.engine.remaining_ms)
+        # REMINDER: no live countdown — the display keeps showing the target time
 
     def _on_countdown_finished(self):
         self.engine.reset()
@@ -518,4 +598,6 @@ class MainWindow(QWidget):
     def _on_alarm_done(self):
         """Called when the alarm finishes — stop flash, re-enable Start."""
         self.time_display.stop_flash()
+        if self.engine.mode == TimerMode.REMINDER:
+            self._update_reminder_display()
         self._refresh_ui()   # re-enables Start if countdown time > 0

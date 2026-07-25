@@ -44,18 +44,25 @@ class ControlPanel(QWidget):
 
         make_shadow(self)
         self._state = TimerState.IDLE
+        self._no_pause = False
         self._apply(TimerState.IDLE)
 
     def _on_action(self):
         if self._state == TimerState.IDLE:
             self.start_clicked.emit()
         elif self._state == TimerState.RUNNING:
-            self.pause_clicked.emit()
+            if not self._no_pause:
+                self.pause_clicked.emit()
         elif self._state == TimerState.PAUSED:
             self.resume_clicked.emit()
 
-    def update_state(self, state):
+    def update_state(self, state, no_pause: bool = False):
+        """
+        no_pause: when True and state is RUNNING, there's no pause/resume —
+        the action button just shows "Armed" and is disabled until Reset.
+        """
         self._state = state
+        self._no_pause = no_pause
         self._apply(state)
 
     def set_start_enabled(self, enabled: bool):
@@ -71,8 +78,13 @@ class ControlPanel(QWidget):
             self.btn_action.setText("Start")
             self.btn_action.setStyleSheet(PRIMARY_BTN_STYLE)
         elif state == TimerState.RUNNING:
-            self.btn_action.setText("Pause")
-            self.btn_action.setStyleSheet(PAUSE_BTN_STYLE)
+            if self._no_pause:
+                self.btn_action.setText("Armed")
+                self.btn_action.setStyleSheet(PRIMARY_BTN_STYLE)
+                self.btn_action.setEnabled(False)
+            else:
+                self.btn_action.setText("Pause")
+                self.btn_action.setStyleSheet(PAUSE_BTN_STYLE)
         elif state == TimerState.PAUSED:
             self.btn_action.setText("Resume")
             self.btn_action.setStyleSheet(PRIMARY_BTN_STYLE)

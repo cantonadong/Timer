@@ -7,10 +7,11 @@ from ui.styles import ACCENT, BG_TOGGLE, TEXT_TERTIARY, BTN_RADIUS
 
 _INSET = 3
 _RADIUS = BTN_RADIUS - 2
+_SEGMENT_W = 126
 
-# Tab order: Countdown first (index 0), Count Up second (index 1)
-_LABELS = ["Countdown", "Count Up"]
-_MODES  = [TimerMode.COUNTDOWN, TimerMode.COUNTUP]
+# Tab order: Countdown, Count Up, Reminder
+_LABELS = ["Countdown", "Count Up", "Reminder"]
+_MODES  = [TimerMode.COUNTDOWN, TimerMode.COUNTUP, TimerMode.REMINDER]
 
 
 class ModeToggle(QWidget):
@@ -26,7 +27,7 @@ class ModeToggle(QWidget):
         self._anim.setDuration(180)
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
 
-        self.setFixedSize(240, 40)
+        self.setFixedSize(_SEGMENT_W * len(_MODES), 40)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_StyledBackground, False)
 
@@ -58,15 +59,20 @@ class ModeToggle(QWidget):
             self.update()
 
     def _target_x(self, mode):
-        # Countdown → left (index 0), Count Up → right (index 1)
-        return float(_INSET) if mode == TimerMode.COUNTDOWN else self.width() / 2.0
+        # First segment sits flush against the inset; each later segment starts
+        # at its own multiple of the segment width (see paintEvent for why this
+        # keeps a matching inset gap on the right edge for the last segment).
+        idx = _MODES.index(mode)
+        seg_w = self.width() / len(_MODES)
+        return float(_INSET) if idx == 0 else idx * seg_w
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+        painter.setOpacity(1.0 if self.isEnabled() else 0.4)
 
         w, h = float(self.width()), float(self.height())
-        half = w / 2.0
+        seg_w = w / len(_MODES)
 
         # Container
         painter.setPen(Qt.NoPen)
@@ -74,7 +80,7 @@ class ModeToggle(QWidget):
         painter.drawRoundedRect(QRectF(0, 0, w, h), BTN_RADIUS, BTN_RADIUS)
 
         # Indicator
-        ind_w = half - float(_INSET)
+        ind_w = seg_w - float(_INSET)
         ind_h = h - 2 * _INSET
         painter.setBrush(QColor(ACCENT))
         painter.drawRoundedRect(
@@ -83,12 +89,12 @@ class ModeToggle(QWidget):
 
         # Labels
         font = QFont("Segoe UI")
-        font.setPointSize(13)
+        font.setPointSize(11)
         font.setWeight(QFont.Medium)
         painter.setFont(font)
 
         for i, (label, mode) in enumerate(zip(_LABELS, _MODES)):
-            rect = QRectF(i * half, 0.0, half, h)
+            rect = QRectF(i * seg_w, 0.0, seg_w, h)
             painter.setPen(
                 QColor("white") if self._mode == mode else QColor(TEXT_TERTIARY)
             )
@@ -99,7 +105,8 @@ class ModeToggle(QWidget):
     def mousePressEvent(self, event):
         if event.button() != Qt.LeftButton:
             return
-        idx = 0 if event.x() < self.width() // 2 else 1
+        seg_w = self.width() / len(_MODES)
+        idx = min(len(_MODES) - 1, int(event.x() // seg_w))
         new_mode = _MODES[idx]
         if new_mode == self._mode:
             return

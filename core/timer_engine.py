@@ -5,6 +5,7 @@ from enum import Enum
 class TimerMode(Enum):
     COUNTUP = "countup"
     COUNTDOWN = "countdown"
+    REMINDER = "reminder"
 
 
 class TimerState(Enum):
@@ -35,7 +36,7 @@ class TimerEngine:
     @property
     def is_finished(self):
         return (
-            self.mode == TimerMode.COUNTDOWN
+            self.mode in (TimerMode.COUNTDOWN, TimerMode.REMINDER)
             and self.state == TimerState.RUNNING
             and self.remaining_ms == 0
         )

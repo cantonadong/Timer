@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# Local Claude Code settings (machine-specific)
+.claude/settings.local.json

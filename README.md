@@ -6,10 +6,11 @@ A minimal, frameless desktop timer for Windows built with PyQt5.
 
 ## Features
 
-- **Count-up & Countdown** — toggle between stopwatch and timer mode
+- **Count-up, Countdown & Reminder** — toggle between stopwatch, timer, and remind-me-at-a-time modes
 - **Scroll to set time** — hover over hours, minutes, or seconds and scroll to adjust
 - **Presets** — save up to 3 custom durations; persisted between sessions
-- **Alarm** — plays audio on countdown finish, falls back to system beep
+- **Reminder** — set a target clock time, with an optional early heads-up (5/10/15/20/30/45/60 min, off by default, fine-tunable with the mouse wheel)
+- **Alarm** — plays audio when the countdown or reminder fires, falls back to system beep
 - **Always on top** — pin the window above all other apps
 - **Keyboard shortcuts**
 
@@ -40,6 +41,20 @@ python timer.py
 
 Or double-click `timer.bat` (uses `pythonw.exe` to run without a console window).
 
+### Standalone .exe (no console, no Python required)
+
+Build a single-file `Timer.exe` with PyInstaller — this is the cleanest way to run
+the app with nothing but its own window, no terminal flash at all:
+
+```
+pip install pyinstaller
+python -m PyInstaller --noconfirm --onefile --windowed --icon assets\timer.ico --name Timer --add-data "Flow.mp3;." timer.py
+```
+
+The result is `dist\Timer.exe`. Copy it anywhere and double-click to run;
+`build\`, `dist\`, and `Timer.spec` are gitignored build output — rerun the
+command above to rebuild after code changes.
+
 ## Project Structure
 
 ```
@@ -50,15 +65,16 @@ Timer/
 ├── assets/
 │   └── timer.ico
 ├── core/
-│   ├── timer_engine.py   # Stateful timer logic (count-up / countdown)
+│   ├── timer_engine.py   # Stateful timer logic (count-up / countdown / reminder)
 │   ├── audio.py          # Audio playback wrapper
 │   └── settings.py       # Preset persistence (saved to %APPDATA%\Timer)
 └── ui/
     ├── main_window.py    # Main window, title bar, layout
     ├── display.py        # Time display widget
     ├── controls.py       # Start / Pause / Resume / Reset buttons
-    ├── mode_toggle.py    # Count-up ↔ Countdown toggle
+    ├── mode_toggle.py    # Countdown ↔ Count Up ↔ Reminder toggle
     ├── presets.py        # Preset bar
+    ├── reminder.py        # Reminder target time + early-alert offset panel
     └── styles.py         # Color tokens
 ```
 
